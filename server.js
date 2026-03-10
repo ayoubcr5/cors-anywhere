@@ -1,49 +1,62 @@
-// Listen on a specific host via the HOST environment variable
 var host = process.env.HOST || '0.0.0.0';
-// Listen on a specific port via the PORT environment variable
 var port = process.env.PORT || 8080;
 
-// Grab the blacklist from the command-line so that we can update the blacklist without deploying
-// again. CORS Anywhere is open by design, and this blacklist is not used, except for countering
-// immediate abuse (e.g. denial of service). If you want to block all origins except for some,
-// use originWhitelist instead.
-var originBlacklist = parseEnvList(process.env.CORSANYWHERE_BLACKLIST);
-var originWhitelist = parseEnvList(process.env.CORSANYWHERE_WHITELIST);
+var cors_proxy = require('./lib/cors-anywhere');
+
+// Helper to parse environment variables for white/blacklists
 function parseEnvList(env) {
-  if (!env) {
-    return [];
-  }
+  if (!env) return [];
   return env.split(',');
 }
 
-// Set up rate-limiting to avoid abuse of the public CORS Anywhere server.
+var originBlacklist = parseEnvList(process.env.CORSANYWHERE_BLACKLIST);
+var originWhitelist = parseEnvList(process.env.CORSANYWHERE_WHITELIST);
 var checkRateLimit = require('./lib/rate-limit')(process.env.CORSANYWHERE_RATELIMIT);
 
-var cors_proxy = require('./lib/cors-anywhere');
 cors_proxy.createServer({
   originBlacklist: originBlacklist,
   originWhitelist: originWhitelist,
-  requireHeader: ['origin', 'x-requested-with'],
+  
+  /**
+   * ADAPTIVE CHANGE: 
+   * Removed 'x-requested-with' requirement to make it easier for 
+   * HLS players (like hls.js or Shaka) to call the license server.
+   */
+  requireHeader: [], 
+
   checkRateLimit: checkRateLimit,
+
+  /**
+   * ADAPTIVE CHANGE:
+   * We only remove headers that Heroku or the browser injects 
+   * that might break the Irdeto handshake. 
+   * We MUST keep 'authorization' and 'content-type'.
+   */
   removeHeaders: [
     'cookie',
     'cookie2',
-    // Strip Heroku-specific headers
     'x-request-start',
     'x-request-id',
     'via',
     'connect-time',
-    'total-route-time',
-    // Other Heroku added debug headers
-    // 'x-forwarded-for',
-    // 'x-forwarded-proto',
-    // 'x-forwarded-port',
+    'total-route-time'
   ],
+
+  /**
+   * ADAPTIVE CHANGE:
+   * Some license servers check the User-Agent. This ensures the 
+   * proxy doesn't overwrite it with a generic Node.js one.
+   */
+  setHeaders: {
+    'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+  },
+
   redirectSameOrigin: true,
   httpProxyOptions: {
-    // Do not add X-Forwarded-For, etc. headers, because Heroku already adds it.
     xfwd: false,
+    // Ensure the proxy can handle the binary response from the license server
+    buffer: require('stream').PassThrough(), 
   },
 }).listen(port, host, function() {
-  console.log('Running CORS Anywhere on ' + host + ':' + port);
+  console.log('Adaptive CORS Anywhere running on ' + host + ':' + port);
 });
