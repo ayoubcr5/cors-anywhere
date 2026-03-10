@@ -22,7 +22,7 @@ var cors_proxy = require('./lib/cors-anywhere');
 cors_proxy.createServer({
   originBlacklist: originBlacklist,
   originWhitelist: ['https://starnhl.com'],
-  requireHeader: ['origin', 'x-requested-with'],
+requireHeader: ['origin']
   checkRateLimit: checkRateLimit,
   removeHeaders: [
     'cookie',
