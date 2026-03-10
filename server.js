@@ -1,5 +1,6 @@
-// Heroku defines the environment variable PORT, and requires the binding address to be 0.0.0.0
-var host = process.env.PORT ? '0.0.0.0' : '127.0.0.1';
+// Listen on a specific host via the HOST environment variable
+var host = process.env.HOST || '0.0.0.0';
+// Listen on a specific port via the PORT environment variable
 var port = process.env.PORT || 8080;
 
 // Grab the blacklist from the command-line so that we can update the blacklist without deploying
@@ -21,17 +22,22 @@ var checkRateLimit = require('./lib/rate-limit')(process.env.CORSANYWHERE_RATELI
 var cors_proxy = require('./lib/cors-anywhere');
 cors_proxy.createServer({
   originBlacklist: originBlacklist,
-  originWhitelist: ['https://starnhl.com'],
-requireHeader: ['origin']
+  originWhitelist: originWhitelist,
+  requireHeader: ['origin', 'x-requested-with'],
   checkRateLimit: checkRateLimit,
   removeHeaders: [
     'cookie',
     'cookie2',
     // Strip Heroku-specific headers
-    'x-heroku-queue-wait-time',
-    'x-heroku-queue-depth',
-    'x-heroku-dynos-in-use',
     'x-request-start',
+    'x-request-id',
+    'via',
+    'connect-time',
+    'total-route-time',
+    // Other Heroku added debug headers
+    // 'x-forwarded-for',
+    // 'x-forwarded-proto',
+    // 'x-forwarded-port',
   ],
   redirectSameOrigin: true,
   httpProxyOptions: {
