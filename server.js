@@ -4,12 +4,41 @@ const { createProxyMiddleware } = require('http-proxy-middleware');
 
 const app = express();
 
-// Global CORS - allows your proxy to be accessed from other domains
-app.use(cors());
+// 1. Configure CORS to only allow starnhl.com
+const allowedOrigins = [
+    'https://starnhl.com', 
+    'https://www.starnhl.com'
+];
+
+const corsOptions = {
+    origin: function (origin, callback) {
+        // Allow requests with no origin (like mobile apps or curl) 
+        // Remove "!origin" if you want to be extremely strict
+        if (!origin || allowedOrigins.includes(origin)) {
+            callback(null, true);
+        } else {
+            callback(new Error('Access denied: Unauthorized Origin'));
+        }
+    }
+};
+
+app.use(cors(corsOptions));
+
+// 2. Security Middleware to block non-browser/direct access
+app.use((req, res, next) => {
+    const origin = req.get('origin') || req.get('referer');
+    
+    // Check if the request is coming from your domain
+    const isAllowed = allowedOrigins.some(domain => origin && origin.startsWith(domain));
+
+    if (!isAllowed) {
+        return res.status(403).send('Forbidden: Access allowed only from starnhl.com');
+    }
+    next();
+});
 
 /**
- * PROXY 1: Query Param Style
- * Access via: /proxy?url=https://example.com
+ * Proxy 1: ?url= style
  */
 app.get('/proxy', (req, res, next) => {
     const targetUrl = req.query.url;
@@ -18,38 +47,30 @@ app.get('/proxy', (req, res, next) => {
     createProxyMiddleware({
         target: targetUrl,
         changeOrigin: true,
-        // ignorePath is set to true so it doesn't try to send '/proxy' to the target
-        pathRewrite: { '^/proxy': '' }, 
+        pathRewrite: { '^/proxy': '' },
         onProxyRes: (proxyRes) => {
-            proxyRes.headers['Access-Control-Allow-Origin'] = '*';
+            // Ensure the response headers also reflect your specific domain
+            proxyRes.headers['Access-Control-Allow-Origin'] = req.get('origin') || 'https://starnhl.com';
         }
     })(req, res, next);
 });
 
 /**
- * PROXY 2: Path-based Style (CORS Anywhere style)
- * Access via: /anywhere/https://example.com
+ * Proxy 2: /url style (CORS Anywhere)
  */
-app.use('/anywhere/:targetUrl*', (req, res, next) => {
-    // Extracts the full URL after /anywhere/
+app.use('/:targetUrl*', (req, res, next) => {
     const targetUrl = req.params.targetUrl + req.params[0];
-    
-    if (!targetUrl) return res.status(400).send('No target URL provided');
+    if (!targetUrl || targetUrl === 'favicon.ico') return next();
 
     createProxyMiddleware({
         target: targetUrl,
         changeOrigin: true,
-        pathRewrite: (path) => path.replace(/^\/anywhere\//, ''),
+        pathRewrite: (path) => path.replace(/^\//, ''),
         onProxyRes: (proxyRes) => {
-            proxyRes.headers['Access-Control-Allow-Origin'] = '*';
+            proxyRes.headers['Access-Control-Allow-Origin'] = req.get('origin') || 'https://starnhl.com';
         }
     })(req, res, next);
 });
 
-// Default Home Route
-app.get('/', (req, res) => {
-    res.send('Proxy Server is Active. Use /proxy?url= or /anywhere/URL');
-});
-
 const port = process.env.PORT || 8080;
-app.listen(port, () => console.log(`Unified Proxy running on port ${port}`));
+app.listen(port, () => console.log(`Secure Proxy running for starnhl.com on port ${port}`));
