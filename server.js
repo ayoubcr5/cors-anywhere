@@ -5,17 +5,20 @@ const https = require('https');
 const PORT = process.env.PORT || 3000;
 
 const server = http.createServer((req, res) => {
-    // 1. Manually handle CORS
-    res.setHeader('Access-Control-Allow-Origin', '*');
+    // 1. Détection dynamique de l'origine
+    // Si l'appel vient de starnhl.com, on répond starnhl.com
+    const origin = req.headers.origin || '*';
+
+    res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS, POST, PUT, DELETE');
-    res.setHeader('Access-Control-Allow-Headers', '*');
+    res.setHeader('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+    res.setHeader('Access-Control-Allow-Credentials', 'true'); // Très important pour les flux vidéo
 
     if (req.method === 'OPTIONS') {
         res.writeHead(200);
         res.end();
         return;
     }
-
     // 2. Extract the target URL from the path
     // This handles: /https://startimes.com or /startimes.com
     let targetPath = req.url.substring(1); 
