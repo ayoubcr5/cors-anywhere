@@ -1,33 +1,53 @@
 const http = require('http');
 const httpProxy = require('http-proxy');
 
-// Create the proxy server instance
 const proxy = httpProxy.createProxyServer({});
 
-// Intercept the request to modify headers
+// Scrape off the identifying headers
 proxy.on('proxyReq', function(proxyReq, req, res, options) {
-  proxyReq.removeHeader('Origin');
-  proxyReq.removeHeader('Referer');
-  
-  // Optional: Set a custom User-Agent if the target blocks empty referers
-  proxyReq.setHeader('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)');
+    proxyReq.removeHeader('Origin');
+    proxyReq.removeHeader('Referer');
+    
+    // Set a generic User-Agent to avoid being blocked as a bot
+    proxyReq.setHeader('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
 });
 
 const server = http.createServer((req, res) => {
-  // You can pass the target URL via a query param or environment variable
-  // For Railway, it's best to use an environment variable for the target
-  const target = process.env.TARGET_URL || 'https://api.example.com';
+    // 1. Extract the target URL from the path (e.g., /https://startimes.com)
+    // We remove the leading slash using .substring(1)
+    let targetUrl = req.url.substring(1);
 
-  proxy.web(req, res, {
-    target: target,
-    changeOrigin: true, // Necessary to change the host header to the target's host
-  }, (err) => {
-    res.writeHead(500, { 'Content-Type': 'text/plain' });
-    res.end('Proxy Error: ' + err.message);
-  });
+    // Basic validation: if no URL is provided, show a simple message
+    if (!targetUrl || !targetUrl.startsWith('http')) {
+        res.writeHead(200, { 'Content-Type': 'text/plain' });
+        res.end('Usage: https://your-proxy.railway.app/https://example.com');
+        return;
+    }
+
+    // 2. Handle CORS headers so you can call this from any frontend
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', '*');
+
+    if (req.method === 'OPTIONS') {
+        res.writeHead(200);
+        res.end();
+        return;
+    }
+
+    // 3. Forward the request to the dynamic target
+    proxy.web(req, res, {
+        target: targetUrl,
+        changeOrigin: true,
+        prependPath: false, // Prevents the proxy from appending the path twice
+        ignorePath: true    // We already have the full target URL
+    }, (err) => {
+        res.writeHead(500);
+        res.end('Proxy Error: ' + err.message);
+    });
 });
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-  console.log(`Proxy server scrubbing headers on port ${PORT}`);
+    console.log(`Dynamic Proxy running on port ${PORT}`);
 });
