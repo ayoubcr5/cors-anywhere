@@ -1,64 +1,52 @@
-const http = require('http');
-const https = require('https');
 const { URL } = require('url');
+const https = require('https');
+const http = require('http');
 
 export default function handler(req, res) {
-    // 1. Precise Origin Handling
     const origin = req.headers.origin || '*';
 
-    // Set CORS headers immediately
+    // Set CORS headers immediately for EVERY response
     res.setHeader('Access-Control-Allow-Origin', origin);
-    res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS, POST, PUT, DELETE');
-    res.setHeader('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS, POST');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
     res.setHeader('Access-Control-Allow-Credentials', 'true');
 
     if (req.method === 'OPTIONS') {
-        res.status(200).end();
-        return;
+        return res.status(200).end();
     }
 
-    // 2. Extract and Validate Target URL
-    let targetPath = req.url.split('/?url=')[1] || req.url.substring(1);
-    if (!targetPath || targetPath === 'api') {
-        return res.status(200).send('Proxy active. Usage: /https://example.com');
-    }
+    // Get URL from query string: ?url=https://...
+    const targetUrl = req.query.url;
 
-    const targetUrl = targetPath.startsWith('http') ? targetPath : 'https://' + targetPath;
+    if (!targetUrl) {
+        return res.status(400).send('Missing "url" parameter.');
+    }
 
     try {
         const urlObj = new URL(targetUrl);
         const client = urlObj.protocol === 'https:' ? https : http;
 
-        const requestHeaders = { ...req.headers };
-        delete requestHeaders['host'];
-        delete requestHeaders['origin'];
-        delete requestHeaders['referer'];
-
         const proxyReq = client.request(targetUrl, {
             method: req.method,
-            headers: { ...requestHeaders, host: urlObj.host }
+            headers: { 
+                ...req.headers, 
+                host: urlObj.host,
+                origin: undefined, // Scrub origin to trick the target
+                referer: undefined 
+            }
         }, (proxyRes) => {
-            
-            // 3. THE FIX: Filter out the target's own CORS headers
-            const headersToForward = { ...proxyRes.headers };
-            Object.keys(headersToForward).forEach(header => {
-                if (header.toLowerCase().startsWith('access-control-')) {
-                    delete headersToForward[header];
-                }
-            });
+            // Scrub target's CORS headers to avoid "Multiple allow-origin" error
+            const headers = { ...proxyRes.headers };
+            delete headers['access-control-allow-origin'];
+            delete headers['content-security-policy'];
 
-            // Remove security blocks
-            delete headersToForward['content-security-policy'];
-            delete headersToForward['x-frame-options'];
-
-            res.writeHead(proxyRes.statusCode, headersToForward);
+            res.writeHead(proxyRes.statusCode, headers);
             proxyRes.pipe(res);
         });
 
-        proxyReq.on('error', (e) => res.status(500).send('Proxy Error: ' + e.message));
+        proxyReq.on('error', (e) => res.status(500).send(e.message));
         req.pipe(proxyReq);
-
-    } catch (err) {
+    } catch (e) {
         res.status(400).send('Invalid URL');
     }
 }
