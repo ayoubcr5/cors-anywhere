@@ -1,32 +1,13 @@
 const http = require('http');
-const httpProxy = require('http-proxy');
+const https = require('https');
 
-const proxy = httpProxy.createProxyServer({});
-
-// Scrape off the identifying headers
-proxy.on('proxyReq', function(proxyReq, req, res, options) {
-    proxyReq.removeHeader('Origin');
-    proxyReq.removeHeader('Referer');
-    
-    // Set a generic User-Agent to avoid being blocked as a bot
-    proxyReq.setHeader('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
-});
+// Railway uses the PORT environment variable
+const PORT = process.env.PORT || 3000;
 
 const server = http.createServer((req, res) => {
-    // 1. Extract the target URL from the path (e.g., /https://startimes.com)
-    // We remove the leading slash using .substring(1)
-    let targetUrl = req.url.substring(1);
-
-    // Basic validation: if no URL is provided, show a simple message
-    if (!targetUrl || !targetUrl.startsWith('http')) {
-        res.writeHead(200, { 'Content-Type': 'text/plain' });
-        res.end('Usage: https://your-proxy.railway.app/https://example.com');
-        return;
-    }
-
-    // 2. Handle CORS headers so you can call this from any frontend
+    // 1. Manually handle CORS
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS, POST, PUT, DELETE');
     res.setHeader('Access-Control-Allow-Headers', '*');
 
     if (req.method === 'OPTIONS') {
@@ -35,19 +16,75 @@ const server = http.createServer((req, res) => {
         return;
     }
 
-    // 3. Forward the request to the dynamic target
-    proxy.web(req, res, {
-        target: targetUrl,
-        changeOrigin: true,
-        prependPath: false, // Prevents the proxy from appending the path twice
-        ignorePath: true    // We already have the full target URL
-    }, (err) => {
-        res.writeHead(500);
-        res.end('Proxy Error: ' + err.message);
-    });
+    // 2. Extract the target URL from the path
+    // This handles: /https://startimes.com or /startimes.com
+    let targetPath = req.url.substring(1); 
+    
+    if (!targetPath) {
+        res.writeHead(200, { 'Content-Type': 'text/plain' });
+        return res.end('Proxy is active. Usage: /https://example.com');
+    }
+
+    // Ensure the protocol is present
+    const initialUrl = targetPath.startsWith('http') ? targetPath : 'https://' + targetPath;
+
+    // 3. Recursive fetch function to handle redirects and header scrubbing
+    function fetchUrl(currentUrl, redirectCount = 0) {
+        if (redirectCount > 5) {
+            res.writeHead(500);
+            return res.end('Proxy Error: Too many redirects');
+        }
+
+        try {
+            const urlObj = new URL(currentUrl);
+            const client = urlObj.protocol === 'https:' ? https : http;
+
+            // --- HEADER SCRUBBING LOGIC ---
+            // We clone the incoming headers but specifically exclude Origin and Referer
+            const requestHeaders = { ...req.headers };
+            delete requestHeaders['origin'];
+            delete requestHeaders['referer'];
+            
+            // Set the host to match the target site
+            requestHeaders['host'] = urlObj.host;
+
+            const options = {
+                method: req.method,
+                headers: requestHeaders
+            };
+
+            const proxyReq = client.request(currentUrl, options, (proxyRes) => {
+                // Handle Redirects
+                if ([301, 302, 303, 307, 308].includes(proxyRes.statusCode) && proxyRes.headers.location) {
+                    const nextUrl = new URL(proxyRes.headers.location, currentUrl).href;
+                    return fetchUrl(nextUrl, redirectCount + 1);
+                }
+
+                // Prepare response headers for the browser
+                const headersToForward = { ...proxyRes.headers };
+                delete headersToForward['content-security-policy']; // Avoid CSP blocking on your domain
+
+                res.writeHead(proxyRes.statusCode, headersToForward);
+                proxyRes.pipe(res);
+            });
+
+            proxyReq.on('error', (e) => {
+                res.writeHead(500);
+                res.end('Proxy Error: ' + e.message);
+            });
+
+            // Pipe the original request body (useful for POST requests)
+            req.pipe(proxyReq);
+
+        } catch (err) {
+            res.writeHead(400);
+            res.end('Invalid URL provided');
+        }
+    }
+
+    fetchUrl(initialUrl);
 });
 
-const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-    console.log(`Dynamic Proxy running on port ${PORT}`);
+    console.log(`Proxy running on port ${PORT}`);
 });
