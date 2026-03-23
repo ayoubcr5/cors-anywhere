@@ -55,21 +55,38 @@ const server = http.createServer((req, res) => {
                 method: req.method,
                 headers: requestHeaders
             };
+const proxyReq = client.request(currentUrl, options, (proxyRes) => {
+    // Handle Redirects
+    if ([301, 302, 303, 307, 308].includes(proxyRes.statusCode) && proxyRes.headers.location) {
+        const nextUrl = new URL(proxyRes.headers.location, currentUrl).href;
+        return fetchUrl(nextUrl, redirectCount + 1);
+    }
 
-            const proxyReq = client.request(currentUrl, options, (proxyRes) => {
-                // Handle Redirects
-                if ([301, 302, 303, 307, 308].includes(proxyRes.statusCode) && proxyRes.headers.location) {
-                    const nextUrl = new URL(proxyRes.headers.location, currentUrl).href;
-                    return fetchUrl(nextUrl, redirectCount + 1);
-                }
+    // --- FIX STARTS HERE ---
+    const headersToForward = { ...proxyRes.headers };
+    
+    // Remove the target's existing CORS headers to prevent browser conflicts
+    delete headersToForward['access-control-allow-origin'];
+    delete headersToForward['access-control-allow-methods'];
+    delete headersToForward['access-control-allow-headers'];
+    delete headersToForward['access-control-allow-credentials'];
+    
+    // Also remove CSP and X-Frame-Options to allow embedding (if needed)
+    delete headersToForward['content-security-policy']; 
+    delete headersToForward['x-frame-options'];
 
-                // Prepare response headers for the browser
-                const headersToForward = { ...proxyRes.headers };
-                delete headersToForward['content-security-policy']; // Avoid CSP blocking on your domain
+    // Write your own CORS headers along with the cleaned target headers
+    res.writeHead(proxyRes.statusCode, {
+        ...headersToForward,
+        'Access-Control-Allow-Origin': origin,
+        'Access-Control-Allow-Methods': 'GET, OPTIONS, POST, PUT, DELETE',
+        'Access-Control-Allow-Headers': 'Origin, X-Requested-With, Content-Type, Accept, Authorization',
+        'Access-Control-Allow-Credentials': 'true'
+    });
+    // --- FIX ENDS HERE ---
 
-                res.writeHead(proxyRes.statusCode, headersToForward);
-                proxyRes.pipe(res);
-            });
+    proxyRes.pipe(res);
+});
 
             proxyReq.on('error', (e) => {
                 res.writeHead(500);
