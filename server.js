@@ -8,31 +8,29 @@ var originWhitelist = ['https://starnhl.com', 'https://www.starnhl.com'];
 cors_proxy.createServer({
     originWhitelist: originWhitelist,
     requireHeader: ['origin', 'x-requested-with'],
+    // This cleans the response headers back to starnhl.com
+    removeHeaders: ['cookie', 'cookie2', 'set-cookie'],
     
-    // 1. Force the headers the target server wants to see
-    setHeaders: {
-        'User-Agent': 'OQEE/1.0 (Linux; Android 10)', // Pretend to be the OQEE app
-        'Accept': '*/*',
-        'Accept-Language': 'fr-FR,fr;q=0.9',
-        'Connection': 'keep-alive'
-    },
-
-    // 2. Remove the headers that might get you blocked
-    handleInitialRequest: function(req, res, location) {
-        // Strip out the Origin/Referer so they don't see starnhl.com
-        delete req.headers['origin'];
-        delete req.headers['referer'];
-        
-        // Ensure the host header matches the target (OQEE)
-        req.headers['host'] = location.host; 
-        
-        return false;
-    },
-
     httpProxyOptions: {
         xfwd: false,
-        changeOrigin: true, // Crucial for OQEE/Proximus/Free APIs
+        changeOrigin: true, // This updates the Host header to api-proxad.dc2.oqee.net
+        prependPath: false,
     },
+
+    handleInitialRequest: function(req, res, location) {
+        // 1. Remove identifying headers
+        delete req.headers['origin'];
+        delete req.headers['referer'];
+        delete req.headers['x-forwarded-for'];
+        
+        // 2. Add a realistic User-Agent for OQEE
+        req.headers['user-agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+        
+        // 3. Ensure the Host header is exactly what the destination expects
+        req.headers['host'] = location.host;
+
+        return false;
+    }
 }).listen(port, host, function() {
-    console.log('CORS Proxy tuned for OQEE is running.');
+    console.log('Proxy active on port ' + port);
 });
