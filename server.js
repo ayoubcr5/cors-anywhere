@@ -1,21 +1,20 @@
-const cors_proxy = require('../lib/cors-anywhere');
+const cors_proxy = require('./lib/cors-anywhere');
 
+// Create the proxy instance
 const proxy = cors_proxy.createServer({
-    originWhitelist: [], // Allow all or add your domain
-    requireHeader: [],    // Remove this if you don't want to send X-Requested-With
+    originWhitelist: [], // Allow all
+    requireHeader: [],    // Set to [] to stop the "Missing Header" error
     removeHeaders: ['cookie', 'cookie2'],
-    redirectSameOrigin: false // CRITICAL: This stops the /api redirection loop
+    redirectSameOrigin: false // Prevents the redirect loop you saw earlier
 });
 
+// Vercel expects a function export
 module.exports = (req, res) => {
-    // 1. Manually strip the /api prefix if Vercel adds it
-    req.url = req.url.replace(/^\/api/, '');
-
-    // 2. Fix the "single slash" issue
-    // This ensures that /https:/example.com becomes /https://example.com
+    // Fix the protocol doubling/collapsing issue (https:/ -> https://)
     if (req.url.match(/^\/https?:\/[^/]/)) {
         req.url = req.url.replace(/^(\/https?:\/)/, '$1/');
     }
 
+    // Pass the request to the proxy
     proxy.emit('request', req, res);
 };
