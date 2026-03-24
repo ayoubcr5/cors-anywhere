@@ -1,20 +1,20 @@
 const cors_proxy = require('./lib/cors-anywhere');
 
-// Create the proxy instance
 const proxy = cors_proxy.createServer({
     originWhitelist: [], // Allow all
-    requireHeader: [],    // Set to [] to stop the "Missing Header" error
+    requireHeader: [],    // <--- THIS IS KEY: It allows requests without X-Requested-With
     removeHeaders: ['cookie', 'cookie2'],
-    redirectSameOrigin: false // Prevents the redirect loop you saw earlier
+    redirectSameOrigin: false
 });
 
-// Vercel expects a function export
 module.exports = (req, res) => {
-    // Fix the protocol doubling/collapsing issue (https:/ -> https://)
+    // 1. Fix Vercel's double-slash collapsing
     if (req.url.match(/^\/https?:\/[^/]/)) {
         req.url = req.url.replace(/^(\/https?:\/)/, '$1/');
     }
 
-    // Pass the request to the proxy
+    // 2. Log it for your Vercel Dashboard logs (optional)
+    console.log("Proxying request to: ", req.url);
+
     proxy.emit('request', req, res);
 };
