@@ -1,93 +1,49 @@
-const http = require('http');
-const https = require('https');
+// Listen on a specific host via the HOST environment variable
+var host = process.env.HOST || '0.0.0.0';
+// Listen on a specific port via the PORT environment variable
+var port = process.env.PORT || 8080;
 
-// Railway uses the PORT environment variable
-const PORT = process.env.PORT || 3000;
+// Grab the blacklist from the command-line so that we can update the blacklist without deploying
+// again. CORS Anywhere is open by design, and this blacklist is not used, except for countering
+// immediate abuse (e.g. denial of service). If you want to block all origins except for some,
+// use originWhitelist instead.
+var originBlacklist = parseEnvList(process.env.CORSANYWHERE_BLACKLIST);
+var originWhitelist = parseEnvList(process.env.CORSANYWHERE_WHITELIST);
+function parseEnvList(env) {
+  if (!env) {
+    return [];
+  }
+  return env.split(',');
+}
 
-const server = http.createServer((req, res) => {
-    // 1. Détection dynamique de l'origine
-    // Si l'appel vient de starnhl.com, on répond starnhl.com
-    const origin = req.headers.origin || '*';
+// Set up rate-limiting to avoid abuse of the public CORS Anywhere server.
+var checkRateLimit = require('./lib/rate-limit')(process.env.CORSANYWHERE_RATELIMIT);
 
-    res.setHeader('Access-Control-Allow-Origin', origin);
-    res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS, POST, PUT, DELETE');
-    res.setHeader('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
-    res.setHeader('Access-Control-Allow-Credentials', 'true'); // Très important pour les flux vidéo
-
-    if (req.method === 'OPTIONS') {
-        res.writeHead(200);
-        res.end();
-        return;
-    }
-    // 2. Extract the target URL from the path
-    // This handles: /https://startimes.com or /startimes.com
-    let targetPath = req.url.substring(1); 
-    
-    if (!targetPath) {
-        res.writeHead(200, { 'Content-Type': 'text/plain' });
-        return res.end('Proxy is active. Usage: /https://example.com');
-    }
-
-    // Ensure the protocol is present
-    const initialUrl = targetPath.startsWith('http') ? targetPath : 'https://' + targetPath;
-
-    // 3. Recursive fetch function to handle redirects and header scrubbing
-    function fetchUrl(currentUrl, redirectCount = 0) {
-        if (redirectCount > 5) {
-            res.writeHead(500);
-            return res.end('Proxy Error: Too many redirects');
-        }
-
-        try {
-            const urlObj = new URL(currentUrl);
-            const client = urlObj.protocol === 'https:' ? https : http;
-
-            // --- HEADER SCRUBBING LOGIC ---
-            // We clone the incoming headers but specifically exclude Origin and Referer
-            const requestHeaders = { ...req.headers };
-            delete requestHeaders['origin'];
-            delete requestHeaders['referer'];
-            
-            // Set the host to match the target site
-            requestHeaders['host'] = urlObj.host;
-
-            const options = {
-                method: req.method,
-                headers: requestHeaders
-            };
-
-            const proxyReq = client.request(currentUrl, options, (proxyRes) => {
-                // Handle Redirects
-                if ([301, 302, 303, 307, 308].includes(proxyRes.statusCode) && proxyRes.headers.location) {
-                    const nextUrl = new URL(proxyRes.headers.location, currentUrl).href;
-                    return fetchUrl(nextUrl, redirectCount + 1);
-                }
-
-                // Prepare response headers for the browser
-                const headersToForward = { ...proxyRes.headers };
-                delete headersToForward['content-security-policy']; // Avoid CSP blocking on your domain
-
-                res.writeHead(proxyRes.statusCode, headersToForward);
-                proxyRes.pipe(res);
-            });
-
-            proxyReq.on('error', (e) => {
-                res.writeHead(500);
-                res.end('Proxy Error: ' + e.message);
-            });
-
-            // Pipe the original request body (useful for POST requests)
-            req.pipe(proxyReq);
-
-        } catch (err) {
-            res.writeHead(400);
-            res.end('Invalid URL provided');
-        }
-    }
-
-    fetchUrl(initialUrl);
-});
-
-server.listen(PORT, () => {
-    console.log(`Proxy running on port ${PORT}`);
+var cors_proxy = require('./lib/cors-anywhere');
+cors_proxy.createServer({
+  originBlacklist: originBlacklist,
+  originWhitelist: originWhitelist,
+  requireHeader: ['origin', 'x-requested-with'],
+  checkRateLimit: checkRateLimit,
+  removeHeaders: [
+    'cookie',
+    'cookie2',
+    // Strip Heroku-specific headers
+    'x-request-start',
+    'x-request-id',
+    'via',
+    'connect-time',
+    'total-route-time',
+    // Other Heroku added debug headers
+    // 'x-forwarded-for',
+    // 'x-forwarded-proto',
+    // 'x-forwarded-port',
+  ],
+  redirectSameOrigin: true,
+  httpProxyOptions: {
+    // Do not add X-Forwarded-For, etc. headers, because Heroku already adds it.
+    xfwd: false,
+  },
+}).listen(port, host, function() {
+  console.log('Running CORS Anywhere on ' + host + ':' + port);
 });
