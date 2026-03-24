@@ -6,7 +6,7 @@ export default function handler(req, res) {
     // 1. Setup CORS - Allow your domain to talk to this proxy
     const origin = req.headers.origin || '*';
     res.setHeader('Access-Control-Allow-Origin', origin);
-    res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS, POST');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS, POST, PUT, DELETE');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
     res.setHeader('Access-Control-Allow-Credentials', 'true');
 
@@ -16,11 +16,20 @@ export default function handler(req, res) {
     }
 
     // 2. Extract the Target URL
-    // Supports ?url=https://...
-    const targetUrl = req.query.url;
+    // Option A: Check query parameters (?url=https://...)
+    let targetUrl = req.query.url;
+
+    // Option B: Fallback to path-based URL (/api/https://...)
+    if (!targetUrl) {
+        // This regex looks for the first occurrence of http or https in the full URL string
+        const urlMatch = req.url.match(/https?:\/\/.+/);
+        if (urlMatch) {
+            targetUrl = urlMatch[0];
+        }
+    }
 
     if (!targetUrl) {
-        return res.status(400).send('Usage: /api?url=https://example.com/file.mpd');
+        return res.status(400).send('Usage: /api?url=URL or /api/URL');
     }
 
     try {
@@ -28,7 +37,7 @@ export default function handler(req, res) {
         const client = urlObj.protocol === 'https:' ? https : http;
 
         // 3. Prepare Clean Headers
-        // We copy incoming headers but MUST delete the ones that cause conflicts
+        // We copy incoming headers but delete the ones that cause conflicts
         const requestHeaders = { ...req.headers };
         
         delete requestHeaders['host'];
@@ -71,7 +80,7 @@ export default function handler(req, res) {
             res.status(500).send('Proxy Request Failed: ' + e.message);
         });
 
-        // Forward the request body (important for POST)
+        // Forward the request body (important for POST/PUT)
         req.pipe(proxyReq);
 
     } catch (err) {
