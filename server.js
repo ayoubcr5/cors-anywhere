@@ -7,30 +7,26 @@ const proxy = cors_proxy.createServer({
     redirectSameOrigin: false
 });
 
-// Set the base URL of your stream provider here
-const STREAM_BASE = "https://fastlylive.stan.video/out/v1/live/live-6314476C/CENCxHD/";
-
 module.exports = (req, res) => {
+    // 1. Remove the leading slash
     let targetUrl = req.url.substring(1);
 
-    // 1. Check if the request is a relative segment (doesn't start with http)
-    if (!targetUrl.startsWith('http') && !targetUrl.includes('%3A')) {
-        // Automatically attach the base provider URL to the segment name
-        targetUrl = STREAM_BASE + targetUrl;
-        console.log("Redirecting relative segment to:", targetUrl);
-    } else {
-        // 2. Handle Encoded or standard Full URLs
-        try {
-            if (targetUrl.includes('%3A')) {
-                targetUrl = decodeURIComponent(targetUrl);
-            }
-        } catch (e) { console.error(e); }
-
-        if (targetUrl.match(/^https?:\/[^/]/)) {
-            targetUrl = targetUrl.replace(/^(https?:\/)/, '$1/');
+    // 2. Try to decode if the URL looks encoded (URI encoded or containing %3A)
+    try {
+        if (targetUrl.includes('%3A') || targetUrl.includes('%2F')) {
+            targetUrl = decodeURIComponent(targetUrl);
         }
+    } catch (e) {
+        console.error("Decoding failed", e);
     }
 
+    // 3. Fix the Vercel "single slash" issue if it still exists after decoding
+    if (targetUrl.match(/^https?:\/[^/]/)) {
+        targetUrl = targetUrl.replace(/^(https?:\/)/, '$1/');
+    }
+
+    // 4. Update the request URL for the proxy engine
     req.url = '/' + targetUrl;
+
     proxy.emit('request', req, res);
 };
