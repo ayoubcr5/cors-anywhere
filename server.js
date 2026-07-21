@@ -29,11 +29,21 @@ module.exports = async (req, res) => {
     return;
   }
 
-  let targetUrl = req.url.substring(markerIndex + marker.length);
+let targetUrl = req.url.substring(markerIndex + marker.length);
 
-  // Repair Vercel normalization without decoding signed URL components.
-  targetUrl = targetUrl.replace(/^(https?:)\/(?!\/)/i, '$1//');
+// Vercel may encode the complete target URL during routing.
+if (/^https?%3A%2F%2F/i.test(targetUrl)) {
+  try {
+    targetUrl = decodeURIComponent(targetUrl);
+  } catch {
+    res.statusCode = 400;
+    res.end('Could not decode target URL');
+    return;
+  }
+}
 
+// Also handle https:/example.com normalization.
+targetUrl = targetUrl.replace(/^(https?:)\/(?!\/)/i, '$1//');
   let parsedTarget;
 
   try {
