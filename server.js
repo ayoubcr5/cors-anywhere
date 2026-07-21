@@ -1,49 +1,36 @@
-// Listen on a specific host via the HOST environment variable
-var host = process.env.HOST || '0.0.0.0';
-// Listen on a specific port via the PORT environment variable
-var port = process.env.PORT || 8080;
+const cors_proxy = require('./lib/cors-anywhere');
 
-// Grab the blacklist from the command-line so that we can update the blacklist without deploying
-// again. CORS Anywhere is open by design, and this blacklist is not used, except for countering
-// immediate abuse (e.g. denial of service). If you want to block all origins except for some,
-// use originWhitelist instead.
-var originBlacklist = parseEnvList(process.env.CORSANYWHERE_BLACKLIST);
-var originWhitelist = parseEnvList(process.env.CORSANYWHERE_WHITELIST);
-function parseEnvList(env) {
-  if (!env) {
-    return [];
-  }
-  return env.split(',');
-}
-
-// Set up rate-limiting to avoid abuse of the public CORS Anywhere server.
-var checkRateLimit = require('./lib/rate-limit')(process.env.CORSANYWHERE_RATELIMIT);
-
-var cors_proxy = require('./lib/cors-anywhere');
-cors_proxy.createServer({
-  originBlacklist: originBlacklist,
-  originWhitelist: originWhitelist,
-  requireHeader: ['origin', 'x-requested-with'],
-  checkRateLimit: checkRateLimit,
-  removeHeaders: [
-    'cookie',
-    'cookie2',
-    // Strip Heroku-specific headers
-    'x-request-start',
-    'x-request-id',
-    'via',
-    'connect-time',
-    'total-route-time',
-    // Other Heroku added debug headers
-    // 'x-forwarded-for',
-    // 'x-forwarded-proto',
-    // 'x-forwarded-port',
-  ],
-  redirectSameOrigin: true,
-  httpProxyOptions: {
-    // Do not add X-Forwarded-For, etc. headers, because Heroku already adds it.
-    xfwd: false,
-  },
-}).listen(port, host, function() {
-  console.log('Running CORS Anywhere on ' + host + ':' + port);
+const proxy = cors_proxy.createServer({
+  originWhitelist: [],
+  requireHeader: [],
+  removeHeaders: ['cookie', 'cookie2'],
+  redirectSameOrigin: false
 });
+
+module.exports = (req, res) => {
+  const marker = '?url=';
+  const markerIndex = req.url.indexOf(marker);
+
+  if (markerIndex === -1) {
+    res.statusCode = 404;
+    res.setHeader('access-control-allow-origin', '*');
+    res.end('Use /proxy?url=https://example.com');
+    return;
+  }
+
+  let targetUrl = req.url.substring(markerIndex + marker.length);
+
+  // Repair Vercel normalization: https:/example.com -> https://example.com
+  targetUrl = targetUrl.replace(/^(https?:)\/(?!\/)/i, '$1//');
+
+  if (!/^https?:\/\//i.test(targetUrl)) {
+    res.statusCode = 400;
+    res.setHeader('access-control-allow-origin', '*');
+    res.end('Invalid target URL');
+    return;
+  }
+
+  // Do not decodeURIComponent here. Signed URLs must remain unchanged.
+  req.url = '/' + targetUrl;
+  proxy.emit('request', req, res);
+};
