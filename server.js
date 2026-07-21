@@ -1,49 +1,123 @@
-// Listen on a specific host via the HOST environment variable
-var host = process.env.HOST || '0.0.0.0';
-// Listen on a specific port via the PORT environment variable
-var port = process.env.PORT || 8080;
-
-// Grab the blacklist from the command-line so that we can update the blacklist without deploying
-// again. CORS Anywhere is open by design, and this blacklist is not used, except for countering
-// immediate abuse (e.g. denial of service). If you want to block all origins except for some,
-// use originWhitelist instead.
-var originBlacklist = parseEnvList(process.env.CORSANYWHERE_BLACKLIST);
-var originWhitelist = parseEnvList(process.env.CORSANYWHERE_WHITELIST);
-function parseEnvList(env) {
-  if (!env) {
-    return [];
-  }
-  return env.split(',');
+function setCorsHeaders(req, res) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS');
+  res.setHeader(
+    'Access-Control-Allow-Headers',
+    req.headers['access-control-request-headers'] || '*'
+  );
+  res.setHeader(
+    'Access-Control-Expose-Headers',
+    'Content-Type, Content-Length, Content-Range, Accept-Ranges, X-Final-Url'
+  );
 }
 
-// Set up rate-limiting to avoid abuse of the public CORS Anywhere server.
-var checkRateLimit = require('./lib/rate-limit')(process.env.CORSANYWHERE_RATELIMIT);
+module.exports = async (req, res) => {
+  setCorsHeaders(req, res);
 
-var cors_proxy = require('./lib/cors-anywhere');
-cors_proxy.createServer({
-  originBlacklist: originBlacklist,
-  originWhitelist: originWhitelist,
-  requireHeader: ['origin', 'x-requested-with'],
-  checkRateLimit: checkRateLimit,
-  removeHeaders: [
-    'cookie',
-    'cookie2',
-    // Strip Heroku-specific headers
-    'x-request-start',
-    'x-request-id',
-    'via',
-    'connect-time',
-    'total-route-time',
-    // Other Heroku added debug headers
-    // 'x-forwarded-for',
-    // 'x-forwarded-proto',
-    // 'x-forwarded-port',
-  ],
-  redirectSameOrigin: true,
-  httpProxyOptions: {
-    // Do not add X-Forwarded-For, etc. headers, because Heroku already adds it.
-    xfwd: false,
-  },
-}).listen(port, host, function() {
-  console.log('Running CORS Anywhere on ' + host + ':' + port);
-});
+  if (req.method === 'OPTIONS') {
+    res.statusCode = 204;
+    res.end();
+    return;
+  }
+
+  const marker = '?url=';
+  const markerIndex = req.url.indexOf(marker);
+
+  if (markerIndex === -1) {
+    res.statusCode = 400;
+    res.end('Use /proxy?url=https://example.com');
+    return;
+  }
+
+  let targetUrl = req.url.substring(markerIndex + marker.length);
+
+  // Repair Vercel normalization without decoding signed URL components.
+  targetUrl = targetUrl.replace(/^(https?:)\/(?!\/)/i, '$1//');
+
+  let parsedTarget;
+
+  try {
+    parsedTarget = new URL(targetUrl);
+  } catch {
+    res.statusCode = 400;
+    res.end(`Invalid target URL: ${targetUrl}`);
+    return;
+  }
+
+  if (!['http:', 'https:'].includes(parsedTarget.protocol)) {
+    res.statusCode = 400;
+    res.end('Only HTTP and HTTPS URLs are supported');
+    return;
+  }
+
+  try {
+    const upstreamHeaders = {};
+
+    for (const header of [
+      'accept',
+      'accept-language',
+      'authorization',
+      'content-type',
+      'if-modified-since',
+      'if-none-match',
+      'range',
+      'referer',
+      'user-agent'
+    ]) {
+      if (req.headers[header]) {
+        upstreamHeaders[header] = req.headers[header];
+      }
+    }
+
+    const options = {
+      method: req.method,
+      headers: upstreamHeaders,
+      redirect: 'follow'
+    };
+
+    if (!['GET', 'HEAD'].includes(req.method)) {
+      const chunks = [];
+
+      for await (const chunk of req) {
+        chunks.push(chunk);
+      }
+
+      if (chunks.length) {
+        options.body = Buffer.concat(chunks);
+      }
+    }
+
+    const upstream = await fetch(targetUrl, options);
+
+    const blockedHeaders = new Set([
+      'access-control-allow-origin',
+      'connection',
+      'content-encoding',
+      'content-length',
+      'set-cookie',
+      'transfer-encoding'
+    ]);
+
+    upstream.headers.forEach((value, name) => {
+      if (!blockedHeaders.has(name.toLowerCase())) {
+        res.setHeader(name, value);
+      }
+    });
+
+    setCorsHeaders(req, res);
+    res.setHeader('X-Final-Url', upstream.url);
+    res.statusCode = upstream.status;
+
+    if (req.method === 'HEAD' || upstream.status === 204 || upstream.status === 304) {
+      res.end();
+      return;
+    }
+
+    const body = Buffer.from(await upstream.arrayBuffer());
+    res.end(body);
+  } catch (error) {
+    setCorsHeaders(req, res);
+    res.statusCode = 502;
+    res.end(`Proxy request failed: ${error.message}`);
+  }
+};
